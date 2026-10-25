@@ -37,6 +37,6 @@ RUN python3 -m venv /home/airflow/spark_venv && \
         delta-spark==3.2.0 \
         dbt-core==1.8.6 \
         "dbt-spark[session]==1.8.0" \
-        dbt-databricks==1.8.6
+        dbt-databricks==1.8.6 \
         requests==2.32.3 \
         pytest==8.3.2

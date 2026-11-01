@@ -1,0 +1,145 @@
+x-airflow-image: &airflow-image
+  build:
+    context: ./airflow
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: utc
+    EXECUTION_MODE: ${EXECUTION_MODE:-local}
+    LAKEHOUSE_PATH: ${LAKEHOUSE_PATH:-/opt/data_lakehouse}
+    GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    GITHUB_REPOS: ${GITHUB_REPOS:-}
+    DBT_TARGET: ${DBT_TARGET:-local}
+    DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+    DATABRICKS_HTTP_PATH: ${DATABRICKS_HTTP_PATH:-}
+    DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+    DATABRICKS_CATALOG: ${DATABRICKS_CATALOG:-hive_metastore}
+    DATABRICKS_SCHEMA: ${DATABRICKS_SCHEMA:-gold}
+    DATABRICKS_SPARK_VERSION: ${DATABRICKS_SPARK_VERSION:-15.4.x-scala2.12}
+    DATABRICKS_NODE_TYPE: ${DATABRICKS_NODE_TYPE:-Standard_DS3_v2}
+    DATABRICKS_NUM_WORKERS: ${DATABRICKS_NUM_WORKERS:-1}
+    AIRFLOW_CONN_DATABRICKS_DEFAULT: ${AIRFLOW_CONN_DATABRICKS_DEFAULT:-}
+    SPARK_CONF_DIR: /opt/spark-conf
+  volumes: &airflow-common-volumes
+    - ./airflow/dags:/opt/airflow/dags
+    - airflow-logs:/opt/airflow/logs
+    - ./spark/jobs:/opt/spark_jobs
+    - ./spark/conf:/opt/spark-conf
+    - ./dbt_project:/opt/airflow/dbt_project
+    - ./data_lakehouse:/opt/data_lakehouse
+    - ./src:/opt/airflow/src
+    - ./tests:/opt/airflow/tests
+    - spark-ivy-cache:/home/airflow/.ivy2
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+  networks:
+    - lakehouse-net
+
+services:
+  # ---------------------------------------------------------------------------
+  # Exploracion interactiva (Jupyter Lab + PySpark/Delta)
+  # ---------------------------------------------------------------------------
+  jupyter:
+    build:
+      context: ./jupyter
+    ports:
+      - "8888:8888"
+    environment:
+      LAKEHOUSE_PATH: ${LAKEHOUSE_PATH:-/opt/data_lakehouse}
+      SPARK_CONF_DIR: /opt/spark-conf
+    volumes:
+      - ./notebooks:/opt/notebooks
+      - ./data_lakehouse:/opt/data_lakehouse
+      - ./dbt_project:/opt/dbt_project:ro
+      - ./spark/conf:/opt/spark-conf
+      - spark-ivy-cache:/root/.ivy2
+    restart: unless-stopped
+    networks:
+      - lakehouse-net
+
+  # ---------------------------------------------------------------------------
+  # Dashboard de KPIs (Streamlit, lee Gold directo con delta-rs)
+  # ---------------------------------------------------------------------------
+  #dashboard:
+  #  build:
+  #    context: ./dashboard
+  #  ports:
+  #    - "8501:8501"
+  #  environment:
+  #    GOLD_WAREHOUSE_PATH: /opt/dbt_project/spark-warehouse
+  #  volumes:
+  #    - ./dbt_project:/opt/dbt_project:ro
+  #  restart: unless-stopped
+  #  networks:
+  #    - lakehouse-net
+
+  # ---------------------------------------------------------------------------
+  # Orquestacion (Airflow)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-airflow}"]
+      interval: 5s
+      retries: 10
+    networks:
+      - lakehouse-net
+
+  airflow-init:
+    <<: *airflow-image
+    depends_on: *airflow-common-depends-on
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${_AIRFLOW_WWW_USER_USERNAME:-admin}" \
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-admin}" \
+          --firstname Data \
+          --lastname Engineer \
+          --role Admin \
+          --email admin@example.com || true
+
+  airflow-webserver:
+    <<: *airflow-image
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    <<: *airflow-image
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+networks:
+  lakehouse-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  airflow-logs:
+  spark-ivy-cache:

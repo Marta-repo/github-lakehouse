@@ -1,8 +1,9 @@
 # lakehouse-docker-lab
 
 Laboratorio reproducible de Ingeniería de Datos con arquitectura **Medallion
-(Bronze → Silver → Gold)**, integrando **Apache Kafka**, **Apache Spark +
+(Bronze → Silver → Gold)**, integrando **Apache Spark +
 Delta Lake**, **dbt** y **Apache Airflow**.
+Infraestructura adaptada de carrazanap/lakehouse-docker-lab
 
 Todo el stack es **open source y corre local con `docker compose`**, sin
 depender de ninguna nube — la idea es mostrar cómo se arma un stack de datos
